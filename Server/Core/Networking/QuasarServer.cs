@@ -1,8 +1,5 @@
-﻿using System;
+﻿using Quasar.Common.Messages;
 using System.Linq;
-using xServer.Core.Commands;
-using xServer.Core.NetSerializer;
-using xServer.Core.Packets;
 
 namespace xServer.Core.Networking
 {
@@ -35,10 +32,7 @@ namespace xServer.Core.Networking
         {
             if (ProcessingDisconnect || !Listening) return;
             var handler = ClientConnected;
-            if (handler != null)
-            {
-                handler(client);
-            }
+            handler?.Invoke(client);
         }
 
         /// <summary>
@@ -60,10 +54,7 @@ namespace xServer.Core.Networking
         {
             if (ProcessingDisconnect || !Listening) return;
             var handler = ClientDisconnected;
-            if (handler != null)
-            {
-                handler(client);
-            }
+            handler?.Invoke(client);
         }
 
         /// <summary>
@@ -71,8 +62,6 @@ namespace xServer.Core.Networking
         /// </summary>
         public QuasarServer() : base()
         {
-            base.Serializer = new Serializer(PacketRegistery.GetPacketTypes());
-
             base.ClientState += OnClientState;
             base.ClientRead += OnClientRead;
         }
@@ -88,7 +77,7 @@ namespace xServer.Core.Networking
             switch (connected)
             {
                 case true:
-                    new Packets.ServerPackets.GetAuthentication().Execute(client); // begin handshake
+                    client.Send(new GetAuthentication()); // begin handshake
                     break;
                 case false:
                     if (client.Authenticated)
@@ -100,24 +89,30 @@ namespace xServer.Core.Networking
         }
 
         /// <summary>
-        /// Forwards received packets from the client to the PacketHandler.
+        /// Forwards received messages from the client to the MessageHandler.
         /// </summary>
         /// <param name="server">The server the client is connected to.</param>
-        /// <param name="client">The client which has received the packet.</param>
-        /// <param name="packet">The received packet.</param>
-        private void OnClientRead(Server server, Client client, IPacket packet)
+        /// <param name="client">The client which has received the message.</param>
+        /// <param name="message">The received message.</param>
+        private void OnClientRead(Server server, Client client, IMessage message)
         {
-            var type = packet.GetType();
+            var type = message.GetType();
 
             if (!client.Authenticated)
             {
-                if (type == typeof (Packets.ClientPackets.GetAuthenticationResponse))
+                if (type == typeof (GetAuthenticationResponse))
                 {
-                    client.Authenticated = true;
-                    new Packets.ServerPackets.SetAuthenticationSuccess().Execute(client); // finish handshake
-                    CommandHandler.HandleGetAuthenticationResponse(client,
-                        (Packets.ClientPackets.GetAuthenticationResponse) packet);
-                    OnClientConnected(client);
+                    AuthenticateClient(client, (GetAuthenticationResponse) message);
+                    client.Authenticated = AuthenticateClient(client, (GetAuthenticationResponse)message);
+                    if (client.Authenticated)
+                    {
+                        client.Send(new SetAuthenticationSuccess()); // finish handshake
+                        OnClientConnected(client);
+                    }
+                    else
+                    {
+                        client.Disconnect();
+                    }
                 }
                 else
                 {
@@ -126,7 +121,32 @@ namespace xServer.Core.Networking
                 return;
             }
 
-            PacketHandler.HandlePacket(client, packet);
+            MessageHandler.Process(client, message);
+        }
+
+        private bool AuthenticateClient(Client client, GetAuthenticationResponse packet)
+        {
+            if (packet.Id.Length != 64)
+                return false;
+
+            client.Value.Version = packet.Version;
+            client.Value.OperatingSystem = packet.OperatingSystem;
+            client.Value.AccountType = packet.AccountType;
+            client.Value.Country = packet.Country;
+            client.Value.CountryCode = packet.CountryCode;
+            client.Value.Region = packet.Region;
+            client.Value.City = packet.City;
+            client.Value.Id = packet.Id;
+            client.Value.Username = packet.Username;
+            client.Value.PcName = packet.PcName;
+            client.Value.Tag = packet.Tag;
+            client.Value.ImageIndex = packet.ImageIndex;
+
+            // TODO: Refactor tooltip
+            //if (Settings.ShowToolTip)
+            //    client.Send(new GetSystemInfo());
+
+            return true;
         }
     }
 }

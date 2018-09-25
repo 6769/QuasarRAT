@@ -2,6 +2,7 @@
 using Microsoft.Win32;
 using System.Linq;
 using System;
+using Quasar.Common.Utilities;
 
 namespace xClient.Core.Extensions
 {
@@ -233,11 +234,31 @@ namespace xClient.Core.Extensions
         /// <param name="name">The name of the value.</param>
         /// <param name="data">The data of the value</param>
         /// <param name="kind">The value kind of the value</param>
-        /// <returns>Returns a boolean value if the action succeded or failed.</returns>
+        /// <returns>Returns a boolean value if the action succeeded or failed.</returns>
         public static bool SetValueSafe(this RegistryKey key, string name, object data, RegistryValueKind kind)
         {
             try
             {
+                // handle type conversion
+                if (kind != RegistryValueKind.Binary && data.GetType() == typeof(byte[]))
+                {
+                    switch (kind)
+                    {
+                        case RegistryValueKind.String:
+                        case RegistryValueKind.ExpandString:
+                            data = ByteConverter.ToString((byte[]) data);
+                            break;
+                        case RegistryValueKind.DWord:
+                            data = ByteConverter.ToUInt32((byte[]) data);
+                            break;
+                        case RegistryValueKind.QWord:
+                            data = ByteConverter.ToUInt64((byte[]) data);
+                            break;
+                        case RegistryValueKind.MultiString:
+                            data = ByteConverter.ToStringArray((byte[]) data);
+                            break;
+                    }
+                }
                 key.SetValue(name, data, kind);
                 return true;
             }
@@ -365,13 +386,13 @@ namespace xClient.Core.Extensions
         /// </summary>
         /// <param name="key">The registry key of which the values are obtained.</param>
         /// <returns>Yield returns formatted strings of the key and the key value.</returns>
-        public static IEnumerable<string> GetFormattedKeyValues(this RegistryKey key)
+        public static IEnumerable<Tuple<string, string>> GetKeyValues(this RegistryKey key)
         {
             if (key == null) yield break;
 
             foreach (var k in key.GetValueNames().Where(keyVal => !keyVal.IsNameOrValueNull(key)).Where(k => !string.IsNullOrEmpty(k)))
             {
-                yield return string.Format("{0}||{1}", k, key.GetValueSafe(k));
+                yield return new Tuple<string, string>(k, key.GetValueSafe(k));
             }
         }
 

